@@ -1,135 +1,214 @@
 const express = require('express')
 const cors = require('cors')
-const cookieparser = require('cookie-parser')
+const cookieParser = require('cookie-parser')
 const mysql = require('mysql2/promise')
 const bcrypt = require('bcrypt')
 const jwt = require('jsonwebtoken')
-const emailValidator = require('node-email-verifier')
+const emailValidator = require('node-email-verifier');
 
-// --- config ---
-const PORT = 3000
+///config
+const PORT = 3000;
 const HOST = 'localhost'
-const JWT_SECRET = 'jelszo'
+const JWT_SECRET = 'nagyon_nagyon_titkos_egyedi_jelszo'
 const JWT_EXPIRES_IN = '7d'
 const COOKIE_NAME = 'auth_token'
 
-
-// --- cookie bealitas ---
+///cookie beallitas
 const COOKIE_OPTS = {
     httpOnly: true,
     secure: false,
     sameSite: 'lax',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-
+    maxAge: 7 * 24 * 60 * 1000,
 }
 
-// --- adabazis bealitas ---
 const db = mysql.createPool({
     host: 'localhost',
+    port: '3306',
     user: 'root',
     password: '',
     database: 'szavazas'
 })
 
-// --- APP ---
-const app = express()
-
+//app
+const app = express();
 app.use(express.json())
-app.use(cookieparser())
+app.use(cookieParser())
 app.use(cors({
     origin: '*',
     credentials: true
 }))
 
-// --- vegpontok ---
+///middleware
+function auth(req, res, next) {
+    const token = req.cookies[COOKIE_NAME];
+    if (!token) {
+        return res.status(409).json({ message: "Nincs bejelentkezes" })
+    }
+    try {
+        req.user = jwt.verify(token, JWT_SECRET)
+        next();
+    } catch (error) {
+        return res.status(410).json({ message: "nincs érvenyes token" })
+    }
+}
 
+//végpontok
 app.post('/regisztracio', async (req, res) => {
-    const { email, felhasznalonev, jelszo, admin } = req.body
+    const { email, felhasznalonev, jelszo, admin } = req.body;
     if (!email || !felhasznalonev || !jelszo || !admin) {
-        return res.status(400).json("hianyzo bemeneti adatok")
+        return res.status(400).json({ message: "hianyzo bementi adatok" })
     }
 
     try {
         const isValid = await emailValidator(email)
         if (!isValid) {
-            return res.status(401).json({ message: "nem valid email" })
+            return res.status(401).json({ message: "nem valos emailt adtal meg" })
         }
-
-        const [exists] = await db.query('SELECT * FROM felhasznalok WHERE email = ? OR felhasznalonev = ?', [email, felhasznalonev])
+        const [exists] = await db.query('SELECT * FROM felhasznalok WHERE email =? OR felhasznalonev =?', [email, felhasznalonev])
         if (exists.length) {
-            return res.status(402).json({ message: "az email vagy felhasznalo nev mar foglalt" })
+            return res.status(402).json({ message: "email vagy felhszanalonev foglalt" })
         }
-
-        const hash = await bcrypt.hash(jelszo, 10)
-        const [result] = await db.query('INSERT INTO felhasznalok (email, felhasznalonev, jelszo, admin) VALUES(?,?,?,?', [email, felhasznalonev, hash, admin])
+        const hash = await bcrypt.hash(jelszo, 10);
+        const regisztracioSQL = 'INSERT INTO felhasznalok (email, felhasznalonev, jelszo, admin)VALUES (?,?,?,?)'
+        const [result] = await db.query(regisztracioSQL, [email, felhasznalonev, hash, admin])
 
         return res.status(200).json({
-            message: "sikeres regisztracio",
+            message: "Sikeres egisztracio",
             id: result.insertId
         })
+
     } catch (error) {
-        console.log(error)
-        return res.status(500).json({ message: "szerverhiba" })
+        console.log(error);
+        return res.status(500).json({ message: "Szerverhiba" })
     }
 })
 
 app.post('/belepes', async (req, res) => {
-    const { felhasznalonevVagyEmail, jelszo } = req.body
+    const { felhasznalonevVagyEmail, jelszo } = req.body;
     if (!felhasznalonevVagyEmail || !jelszo) {
-        return res.status(400).json({ message: "hianyos belepesi adatok" })
+        return res.status(400).json({ message: "hianyos belepesi adatok" });
     }
 
     try {
         const isValid = await emailValidator(felhasznalonevVagyEmail)
-        let hashJelszo = ""
+        let hashJelszo = "";
         let user = {}
         if (isValid) {
-            const [rows] = await db.query('SELECT * FROM felhasznalok WHERE email = ?', [felhasznalonevVagyEmail])
+            const sql = 'SELECT * FROM felhasznalok  WHERE email =?'
+            const [rows] = await db.query(sql, [felhasznalonevVagyEmail]);
             if (rows.length) {
-                user = rows[0]
-                hashJelszo = user.jelszo
+                user = rows[0];
+                hashJelszo = user.jelszo;
             } else {
-                return res.status(401).json({ message: "ilyen fiok nem letezik" })
+                return res.status(401).json({ message: "nincs ilyen fiok  " });
             }
         } else {
-            const [rows] = await db.query('SELECT * FROM felhasznalok WHERE felhasznalonev = ?', [felhasznalonevVagyEmail])
+            const sql = 'SELECT * FROM felhasznalok  WHERE felhasznaloNev =?'
+            const [rows] = await db.query(sql, [felhasznalonevVagyEmail]);
             if (rows.length) {
-                user = rows[0]
-                hashJelszo = user.jelszo
+                user = rows[0];
+                hashJelszo = user.jelszo;
             } else {
-                return res.status(401).json({ message: "ilyen fiok nem letezik" })
+                return res.status(402).json({ message: "ezzel a felhasznalonevvel meg nem regisztraltak" });
             }
         }
 
         const ok = bcrypt.compare(jelszo, hashJelszo)
         if (!ok) {
-            return res.status(403).json({ message: "rossz jelszot adtal meg" })
+            return res.status(403).json({ message: "rossz jelszot adtál meg" })
         }
-        if (ok) {
-            const token = jwt.sign(
-                { id: user.id, email: user.email, felhasznalonev: user.felhasznalonev, admin: user.admin },
-                JWT_SECRET,
-                { expiresIn: JWT_EXPIRES_IN }
-            )
-            req.cookie(COOKIE_NAME, token, COOKIE_OPTS)
-            res.status(200).json({ message: "sikeres belepes" })
-        }
+        const token = jwt.sign(
+            { id: user.id, email: user.email, felhasznalonev: user.felhasznalonev, admin: user.admin },
+            JWT_SECRET,
+            { expiresIn: JWT_EXPIRES_IN }
+        )
+
+        res.cookie(COOKIE_NAME, token, COOKIE_OPTS)
+        res.status(200).json({ message: "Sikeres belépés" })
+
     } catch (error) {
-        return res.status(500).json({ message: "Szerverhiba" })
+        console.log(error);
+        return res.status(500).json({ message: "szerverhiba" })
+    }
+})
+//vedett
+app.post('/kijelentkezes', auth, async (req, res) => {
+    res.clearCookie(COOKIE_NAME, { path: '/' });
+    res.status(200).json({ message: "sikeres kijelentkezes" })
+})
+
+
+//vedett
+app.get('/adataim', auth, async (req, res) => {
+    res.status(200).json(req.user)
+})
+
+//vedett
+app.put('/email', auth, async (req, res) => {
+    const { ujemail } = req.body
+    if (!ujemail) {
+        return res.status(401).json({ message: "uj email megadasa kotelezo" })
+    }
+    const isValid = await emailValidator(ujemail)
+    if (!isValid) {
+        return res.status(403).json({ message: "nem valos emailt adtal meg" })
+    }
+    try {
+        const sql1 = 'SELECT * FROM felhasznalok WHERE email = ?'
+        const [result] = await db.query(sql1, [ujemail])
+        if (result.length) {
+            return res.status(402).json({ message: "az emailcim foglalt" })
+        }
+        const sql = 'UPDATE felhasznalok SET email = ? WHERE id = ?'
+        await db.query(sql, [ujemail, req.user.id])
+
+        res.status(200).json({ message: "sikeres email valtoztatas" })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ message: "szerverhiba" })
     }
 })
 
-// vedett
-app.get('/adataim', auth, async (req, res) => {
 
+//vedett
+app.put('/felhasznalonev', auth, async (req, res) => {
+    const { ujfelhasznalonev } = req.body
+    if (!ujfelhasznalonev) {
+        return res.status(401).json({ message: "uj email megadasa kotelezo" })
+    }
+    try {
+        const sql1 = 'SELECT * FROM felhasznalok WHERE felhasznalonev = ?'
+        const [result] = await db.query(sql1, [ujfelhasznalonev])
+        if (result.length) {
+            return res.status(402).json({ message: "az felhasznalonev foglalt" })
+        }
+        const sql = 'UPDATE felhasznalok SET felhasznalonev = ? WHERE id = ?'
+        await db.query(sql, [ujfelhasznalonev, req.user.id])
+
+        res.status(200).json({ message: "sikeres felhasznalonev valtoztatas" })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ message: "szerverhiba" })
+    }
+})
+
+
+//vedett
+app.delete('/fiokom',auth,async(req,res)=>{
+    try {
+        await db.query("DELETE FROM felhasznalok WHERE id = ?",[req.user.id])
+        res.clearCookie(COOKIE_NAME, { path: '/' })
+        res.status(200).json({ message: "sikeres fiok torles" })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ message: "szerverhiba" })
+    }
 })
 
 
 
-
-
-// --- szerver elinditasa ---
+//szerver elinditas
 app.listen(PORT, HOST, () => {
-    console.log(`api fut a: http://${HOST}:${PORT}/`)
+    console.log(`API fut: http://${HOST}:${PORT}/`);
 })
