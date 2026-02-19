@@ -69,7 +69,7 @@ app.post('/regisztracio', async (req, res) => {
         if (exists.length) {
             return res.status(402).json({ message: "email vagy felhszanalonev foglalt" })
         }
-        const hash = await bcrypt.hash(jelszo, 10);
+        const hash = await bcrypt.hash(jelszo, 10)
         const regisztracioSQL = 'INSERT INTO felhasznalok (email, felhasznalonev, jelszo, admin)VALUES (?,?,?,?)'
         const [result] = await db.query(regisztracioSQL, [email, felhasznalonev, hash, admin])
 
@@ -194,10 +194,36 @@ app.put('/felhasznalonev', auth, async (req, res) => {
 })
 
 
-//vedett
-app.delete('/fiokom',auth,async(req,res)=>{
+app.put('/jelszo', auth, async (req, res) => {
+    const { jelenlegiJelszo, regiJelszo } = req.body
+    if (!jelenlegiJelszo || !regiJelszo) {
+        return res.status(400).json({ message: "hianyzo bemeneti adatok" })
+    }
     try {
-        await db.query("DELETE FROM felhasznalok WHERE id = ?",[req.user.id])
+        const sql = 'SELECT * FROM felhasznalok  WHERE id =?'
+        const [rows] = await db.query(sql, [req.user.id]);
+        const user = rows[0];
+        const hashJelszo = user.jelszo;
+
+        const ok = bcrypt.compare(jelenlegiJelszo, hashJelszo)
+        if(!ok){
+            return res.status(401).json({message:"hibas jelszot adtal meg"})
+        }
+        const hashUjJelszo = await bcrypt.hash(hashUjJelszo, 10)
+        const sql2 = 'UPDATE felhasznalok SET jelszo = ? WHERE id = ?'
+        await db.query(sql2, [ujemail, req.user.id])
+        res.status(200).json({ message: "sikeres jelszo valtoztatas" })
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ message: "szerverhiba" })
+    }
+})
+
+
+//vedett
+app.delete('/fiokom', auth, async (req, res) => {
+    try {
+        await db.query("DELETE FROM felhasznalok WHERE id = ?", [req.user.id])
         res.clearCookie(COOKIE_NAME, { path: '/' })
         res.status(200).json({ message: "sikeres fiok torles" })
     } catch (error) {
